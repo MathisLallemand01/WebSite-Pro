@@ -28,10 +28,47 @@ function createDb() {
   return db
 }
 
+function stripControlChars(value, { keepNewLines = false } = {}) {
+  let output = ''
+
+  for (const char of value) {
+    const code = char.charCodeAt(0)
+    const isControl = (code >= 0 && code <= 31) || code === 127
+
+    if (!isControl) {
+      output += char
+      continue
+    }
+
+    if (keepNewLines && (char === '\n' || char === '\t')) {
+      output += char
+    }
+  }
+
+  return output
+}
+
+function sanitizeSingleLine(value, maxLength) {
+  return stripControlChars(String(value ?? '').normalize('NFKC').replace(/\r\n?/g, ' '))
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, maxLength)
+}
+
+function sanitizeMultiline(value, maxLength) {
+  return stripControlChars(String(value ?? '').normalize('NFKC').replace(/\r\n?/g, '\n'), {
+    keepNewLines: true,
+  })
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+    .slice(0, maxLength)
+}
+
 function normalizeReview(input) {
-  const name = String(input?.name ?? '').trim()
-  const role = String(input?.role ?? '').trim() || 'Client'
-  const text = String(input?.text ?? '').trim()
+  const name = sanitizeSingleLine(input?.name, 80)
+  const role = sanitizeSingleLine(input?.role, 90) || 'Client'
+  const text = sanitizeMultiline(input?.text, 800)
   const rating = Number(input?.rating ?? 0)
 
   if (!name || !text || !Number.isInteger(rating) || rating < 1 || rating > 5) {
@@ -39,15 +76,21 @@ function normalizeReview(input) {
   }
 
   return {
-    name: name.slice(0, 80),
-    role: role.slice(0, 90),
-    text: text.slice(0, 800),
+    name,
+    role,
+    text,
     rating,
   }
 }
 
 function toRowReview(row) {
-  const payload = JSON.parse(row.payload)
+  let payload
+  try {
+    payload = JSON.parse(row.payload)
+  } catch {
+    return null
+  }
+
   return {
     id: row.id,
     name: payload.name,
@@ -66,7 +109,7 @@ export function createReviewsStore() {
 
   return {
     list() {
-      return selectStmt.all().map(toRowReview)
+      return selectStmt.all().map(toRowReview).filter(Boolean)
     },
     add(input) {
       const normalized = normalizeReview(input)
