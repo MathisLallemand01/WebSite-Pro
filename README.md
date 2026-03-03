@@ -67,7 +67,10 @@ Corps attendu pour `POST /api/contact`:
 - `SMTP_HOST`: serveur SMTP (ex: `smtp.gmail.com`)
 - `SMTP_PORT`: port SMTP (ex: `465`)
 - `SMTP_SECURE`: `true`/`false` (souvent `true` pour 465)
-- `CONTACT_SMTP_TIMEOUT_MS`: timeout SMTP en ms (défaut: légèrement inférieur au timeout requête API)
+- `CONTACT_SMTP_TIMEOUT_MS`: timeout SMTP en ms (plafonné automatiquement pour rester sous le timeout global API)
+- `SMTP_FALLBACK_ENABLED`: active une tentative fallback SMTP automatique (défaut `true`)
+- `SMTP_FALLBACK_PORT`: port fallback SMTP (défaut `587` si port principal `465`)
+- `SMTP_FALLBACK_SECURE`: mode TLS fallback (`false` pour `587`)
 - `SMTP_USER`: utilisateur SMTP
 - `SMTP_PASS`: mot de passe SMTP (pour Gmail: mot de passe d'application)
 
