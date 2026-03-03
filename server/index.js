@@ -369,18 +369,29 @@ async function loadNodemailerModule() {
   return moduleNamespace.default || moduleNamespace
 }
 
+function getMissingContactEnvVars() {
+  const missing = []
+  if (!SMTP_HOST) missing.push('SMTP_HOST')
+  if (!SMTP_USER) missing.push('SMTP_USER')
+  if (!SMTP_PASS) missing.push('SMTP_PASS')
+  if (!CONTACT_FROM_EMAIL) missing.push('CONTACT_FROM_EMAIL')
+  if (!CONTACT_TO_EMAIL) missing.push('CONTACT_TO_EMAIL')
+  return missing
+}
+
 async function getContactTransporter() {
   if (contactTransporter) {
-    return contactTransporter
+    return { transporter: contactTransporter }
   }
 
-  if (!SMTP_HOST || !SMTP_USER || !SMTP_PASS || !CONTACT_FROM_EMAIL || !CONTACT_TO_EMAIL) {
-    return null
+  const missingEnv = getMissingContactEnvVars()
+  if (missingEnv.length > 0) {
+    return { transporter: null, reason: 'missing_env', missingEnv }
   }
 
   const nodemailer = await loadNodemailerModule()
   if (!nodemailer) {
-    return null
+    return { transporter: null, reason: 'module_missing' }
   }
 
   contactTransporter = nodemailer.createTransport({
@@ -393,13 +404,14 @@ async function getContactTransporter() {
     },
   })
 
-  return contactTransporter
+  return { transporter: contactTransporter }
 }
 
 async function sendContactEmail(payload) {
-  const transporter = await getContactTransporter()
+  const setup = await getContactTransporter()
+  const transporter = setup.transporter
   if (!transporter) {
-    return { ok: false, reason: 'not_configured' }
+    return { ok: false, reason: setup.reason || 'not_configured', missingEnv: setup.missingEnv || [] }
   }
 
   const submittedAt = new Date().toISOString()
@@ -583,7 +595,24 @@ async function handleApi(req, res, store) {
     try {
       const result = await sendContactEmail(normalizedContact)
       if (!result.ok) {
-        sendJson(res, 503, { error: 'Service email non configure.' })
+        if (result.reason === 'missing_env') {
+          sendJson(res, 503, {
+            error: 'Service email non configure: variables manquantes.',
+            code: 'missing_env',
+            missingEnv: result.missingEnv,
+          })
+          return true
+        }
+
+        if (result.reason === 'module_missing') {
+          sendJson(res, 503, {
+            error: "Service email non configure: package 'nodemailer' introuvable dans le déploiement.",
+            code: 'module_missing',
+          })
+          return true
+        }
+
+        sendJson(res, 503, { error: 'Service email non configure.', code: 'not_configured' })
         return true
       }
     } catch {
