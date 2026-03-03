@@ -33,6 +33,12 @@
         value: "465"
       - key: SMTP_SECURE
         value: "true"
+      - key: SMTP_FALLBACK_ENABLED
+        value: "true"
+      - key: SMTP_FALLBACK_PORT
+        value: "587"
+      - key: SMTP_FALLBACK_SECURE
+        value: "false"
       - key: SMTP_USER
         sync: false
       - key: SMTP_PASS
