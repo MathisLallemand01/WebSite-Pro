@@ -74,6 +74,9 @@ Corps attendu pour `POST /api/contact`:
 - `SMTP_FALLBACK_SECURE`: mode TLS fallback (`false` pour `587`)
 - `SMTP_USER`: utilisateur SMTP
 - `SMTP_PASS`: mot de passe SMTP (pour Gmail: mot de passe d'application)
+- `EMAIL_TRANSPORT`: `auto` (défaut), `smtp` ou `resend`
+- `RESEND_API_KEY`: clé API Resend (recommandé sur Render free)
+- `RESEND_FROM_EMAIL`: expéditeur Resend (ex: `onboarding@resend.dev` pour tests)
 
 ## Déploiement Render
 
