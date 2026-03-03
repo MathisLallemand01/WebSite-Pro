@@ -46,7 +46,7 @@ const SMTP_HOST = (process.env.SMTP_HOST || '').trim()
 const SMTP_PORT = readPositiveIntEnv('SMTP_PORT', 465)
 const SMTP_SECURE = readBooleanEnv('SMTP_SECURE', SMTP_PORT === 465)
 const SMTP_USER = (process.env.SMTP_USER || '').trim()
-const SMTP_PASS = (process.env.SMTP_PASS || '').trim()
+const SMTP_PASS = (process.env.SMTP_PASS || '').replace(/\s+/g, '').trim()
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' }
 const MIME_TYPES = {
@@ -641,8 +641,24 @@ async function handleApi(req, res, store) {
         sendJson(res, 503, { error: 'Service email non configure.', code: 'not_configured' })
         return true
       }
-    } catch {
-      sendJson(res, 502, { error: "Impossible d'envoyer le message pour le moment." })
+    } catch (error) {
+      const errorCode =
+        error && typeof error === 'object' && 'code' in error ? String(error.code || '') : ''
+      const smtpResponseCode =
+        error && typeof error === 'object' && 'responseCode' in error
+          ? Number(error.responseCode)
+          : null
+
+      console.error('Contact email send failed', {
+        errorCode,
+        smtpResponseCode: Number.isFinite(smtpResponseCode) ? smtpResponseCode : null,
+      })
+
+      sendJson(res, 502, {
+        error: "Impossible d'envoyer le message pour le moment.",
+        code: errorCode || 'smtp_error',
+        smtpResponseCode: Number.isFinite(smtpResponseCode) ? smtpResponseCode : undefined,
+      })
       return true
     }
 
