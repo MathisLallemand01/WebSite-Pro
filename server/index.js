@@ -576,8 +576,8 @@ async function sendMailWithTimeout(transporter, mailPayload, timeoutMs) {
 
 async function sendContactEmail(payload) {
   const submittedAt = new Date().toISOString()
-  const subject = `[Site] Nouvelle demande de contact - ${payload.name}`
-  const text = [
+  const contactSubject = `[Site] Nouvelle demande de contact - ${payload.name}`
+  const contactText = [
     'Nouvelle demande depuis le formulaire du site.',
     '',
     `Nom: ${payload.name}`,
@@ -589,7 +589,7 @@ async function sendContactEmail(payload) {
     'Message:',
     payload.message,
   ].join('\n')
-  const html = `
+  const contactHtml = `
     <h2>Nouvelle demande depuis le formulaire du site</h2>
     <p><strong>Nom:</strong> ${escapeHtml(payload.name)}</p>
     <p><strong>Email:</strong> ${escapeHtml(payload.email)}</p>
@@ -599,6 +599,37 @@ async function sendContactEmail(payload) {
     <p><strong>Message:</strong></p>
     <pre style="white-space: pre-wrap; font-family: inherit;">${escapeHtml(payload.message)}</pre>
   `
+  const confirmationSubject = '[Site] Confirmation de reception de votre message'
+  const confirmationText = [
+    `Bonjour ${payload.name},`,
+    '',
+    'Votre message a bien ete recu.',
+    'Je reviens vers vous rapidement.',
+    '',
+    'Recapitulatif:',
+    `Type de projet: ${payload.projectType}`,
+    `Budget: ${payload.budget}`,
+    `Date de reception: ${submittedAt}`,
+    '',
+    'Message:',
+    payload.message,
+    '',
+    'Merci pour votre confiance.',
+  ].join('\n')
+  const confirmationHtml = `
+    <h2>Message bien recu</h2>
+    <p>Bonjour ${escapeHtml(payload.name)},</p>
+    <p>Votre message a bien ete recu. Je reviens vers vous rapidement.</p>
+    <p><strong>Recapitulatif:</strong></p>
+    <ul>
+      <li><strong>Type de projet:</strong> ${escapeHtml(payload.projectType)}</li>
+      <li><strong>Budget:</strong> ${escapeHtml(payload.budget)}</li>
+      <li><strong>Date de reception:</strong> ${escapeHtml(submittedAt)}</li>
+    </ul>
+    <p><strong>Message:</strong></p>
+    <pre style="white-space: pre-wrap; font-family: inherit;">${escapeHtml(payload.message)}</pre>
+    <p>Merci pour votre confiance.</p>
+  `
 
   if (shouldUseResendTransport()) {
     const missingResendEnv = getMissingResendEnvVars()
@@ -606,36 +637,65 @@ async function sendContactEmail(payload) {
       return { ok: false, reason: 'missing_resend_env', missingEnv: missingResendEnv }
     }
 
-    const resendResponse = await withTimeout(
-      fetch(RESEND_API_URL, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${RESEND_API_KEY}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          from: RESEND_FROM_EMAIL,
-          to: [CONTACT_TO_EMAIL],
-          reply_to: payload.email,
-          subject,
-          text,
-          html,
+    const sendWithResend = async ({ to, replyTo, subject, text, html }) => {
+      const resendResponse = await withTimeout(
+        fetch(RESEND_API_URL, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${RESEND_API_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            from: RESEND_FROM_EMAIL,
+            to,
+            reply_to: replyTo,
+            subject,
+            text,
+            html,
+          }),
         }),
-      }),
-      CONTACT_HANDLER_TIMEOUT_MS,
-    )
+        CONTACT_HANDLER_TIMEOUT_MS,
+      )
 
-    if (!resendResponse.ok) {
-      const raw = await resendResponse.text()
-      return {
-        ok: false,
-        reason: 'resend_error',
-        status: resendResponse.status,
-        detail: raw.slice(0, 500),
+      if (!resendResponse.ok) {
+        const raw = await resendResponse.text()
+        return {
+          ok: false,
+          reason: 'resend_error',
+          status: resendResponse.status,
+          detail: raw.slice(0, 500),
+        }
       }
+
+      return { ok: true }
     }
 
-    return { ok: true }
+    const contactSendResult = await sendWithResend({
+      to: [CONTACT_TO_EMAIL],
+      replyTo: payload.email,
+      subject: contactSubject,
+      text: contactText,
+      html: contactHtml,
+    })
+    if (!contactSendResult.ok) {
+      return contactSendResult
+    }
+
+    const confirmationSendResult = await sendWithResend({
+      to: [payload.email],
+      replyTo: CONTACT_TO_EMAIL,
+      subject: confirmationSubject,
+      text: confirmationText,
+      html: confirmationHtml,
+    })
+    if (!confirmationSendResult.ok) {
+      console.error('Contact confirmation email send failed (Resend)', {
+        status: confirmationSendResult.status,
+      })
+      return { ok: true, confirmationSent: false, confirmationReason: 'resend_error' }
+    }
+
+    return { ok: true, confirmationSent: true }
   }
 
   const setup = await getContactTransporter()
@@ -644,30 +704,54 @@ async function sendContactEmail(payload) {
     return { ok: false, reason: setup.reason || 'not_configured', missingEnv: setup.missingEnv || [] }
   }
 
-  const mailPayload = {
+  const sendWithSmtp = async (mailPayload) => {
+    try {
+      await sendMailWithTimeout(transporter, mailPayload, CONTACT_SMTP_TIMEOUT_MS)
+      return
+    } catch (error) {
+      if (isTransientSmtpConnectionError(error)) {
+        const fallbackSetup = await getContactFallbackTransporter()
+        if (fallbackSetup.transporter) {
+          await sendMailWithTimeout(fallbackSetup.transporter, mailPayload, CONTACT_SMTP_TIMEOUT_MS)
+          return
+        }
+      }
+
+      throw error
+    }
+  }
+
+  const contactMailPayload = {
     from: CONTACT_FROM_EMAIL,
     to: CONTACT_TO_EMAIL,
     replyTo: payload.email,
-    subject,
-    text,
-    html,
+    subject: contactSubject,
+    text: contactText,
+    html: contactHtml,
+  }
+
+  await sendWithSmtp(contactMailPayload)
+
+  const confirmationMailPayload = {
+    from: CONTACT_FROM_EMAIL,
+    to: payload.email,
+    replyTo: CONTACT_TO_EMAIL,
+    subject: confirmationSubject,
+    text: confirmationText,
+    html: confirmationHtml,
   }
 
   try {
-    await sendMailWithTimeout(transporter, mailPayload, CONTACT_SMTP_TIMEOUT_MS)
+    await sendWithSmtp(confirmationMailPayload)
   } catch (error) {
-    if (isTransientSmtpConnectionError(error)) {
-      const fallbackSetup = await getContactFallbackTransporter()
-      if (fallbackSetup.transporter) {
-        await sendMailWithTimeout(fallbackSetup.transporter, mailPayload, CONTACT_SMTP_TIMEOUT_MS)
-        return { ok: true }
-      }
-    }
-
-    throw error
+    console.error('Contact confirmation email send failed (SMTP)', {
+      errorCode: getErrorCode(error) || 'smtp_error',
+      smtpResponseCode: getErrorResponseCode(error),
+    })
+    return { ok: true, confirmationSent: false, confirmationReason: 'smtp_error' }
   }
 
-  return { ok: true }
+  return { ok: true, confirmationSent: true }
 }
 
 async function persistFailedContactRequest(payload, context = {}) {
@@ -838,8 +922,11 @@ async function handleApi(req, res, store) {
       }
     }
 
+    let deliveryResult = { confirmationSent: true }
+
     try {
       const result = await withTimeout(sendContactEmail(normalizedContact), CONTACT_HANDLER_TIMEOUT_MS)
+      deliveryResult = result || deliveryResult
       if (!result.ok) {
         const queued = await queueFailedContactAndRespond({
           reason: result.reason || 'delivery_failed',
@@ -915,7 +1002,7 @@ async function handleApi(req, res, store) {
       return true
     }
 
-    sendJson(res, 201, { success: true })
+    sendJson(res, 201, { success: true, confirmationSent: deliveryResult.confirmationSent !== false })
     return true
   }
 
