@@ -35,6 +35,10 @@ const REQUEST_TIMEOUT_MS = readPositiveIntEnv('REQUEST_TIMEOUT_MS', 10_000)
 const RATE_LIMIT_WINDOW_MS = readPositiveIntEnv('RATE_LIMIT_WINDOW_MS', 10 * 60_000)
 const RATE_LIMIT_MAX_POSTS = readPositiveIntEnv('RATE_LIMIT_MAX_POSTS', 20)
 const PORT = readPositiveIntEnv('PORT', 3001)
+const CONTACT_SMTP_TIMEOUT_MS = readPositiveIntEnv(
+  'CONTACT_SMTP_TIMEOUT_MS',
+  Math.max(3_000, REQUEST_TIMEOUT_MS - 1_500),
+)
 const ADMIN_API_TOKEN = (process.env.ADMIN_API_TOKEN || '').trim()
 const CONTACT_TO_EMAIL = (process.env.CONTACT_TO_EMAIL || 'mathis.lallemmand2@gmail.com').trim()
 const CONTACT_FROM_EMAIL = (process.env.CONTACT_FROM_EMAIL || process.env.SMTP_USER || '').trim()
@@ -178,11 +182,16 @@ function setApiCorsHeaders(req, res) {
 }
 
 function sendJson(res, statusCode, payload) {
+  if (res.headersSent || res.writableEnded) {
+    return false
+  }
+
   res.statusCode = statusCode
   Object.entries(JSON_HEADERS).forEach(([key, value]) => {
     res.setHeader(key, value)
   })
   res.end(JSON.stringify(payload))
+  return true
 }
 
 function hasJsonContentType(req) {
@@ -411,6 +420,9 @@ async function getContactTransporter() {
     host: SMTP_HOST,
     port: SMTP_PORT,
     secure: SMTP_SECURE,
+    connectionTimeout: CONTACT_SMTP_TIMEOUT_MS,
+    greetingTimeout: CONTACT_SMTP_TIMEOUT_MS,
+    socketTimeout: CONTACT_SMTP_TIMEOUT_MS,
     auth: {
       user: SMTP_USER,
       pass: SMTP_PASS,
@@ -751,7 +763,7 @@ const server = createServer(async (req, res) => {
   }
 
   req.setTimeout(REQUEST_TIMEOUT_MS, () => {
-    if (!res.headersSent) {
+    if (!res.headersSent && !res.writableEnded) {
       sendJson(res, 408, { error: 'Delai de requete depasse.' })
     } else {
       res.destroy()
