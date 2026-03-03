@@ -12,7 +12,7 @@
       - key: REVIEWS_DB_PATH
         value: /var/data/reviews.sqlite
       - key: CORS_ORIGIN
-        value: https://website-pro.onrender.com
+        value: https://www.mathislallemand.fr,https://mathislallemand.fr
       - key: MAX_BODY_SIZE
         value: "100000"
       - key: REQUEST_TIMEOUT_MS
