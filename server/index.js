@@ -51,6 +51,7 @@ const allowedCorsOrigins = new Set(
     .map((value) => value.trim())
     .filter((value) => value && value !== '*'),
 )
+const trustedOriginHosts = new Set(['mathislallemand.fr', 'www.mathislallemand.fr'])
 
 const postRateLimitStore = new Map()
 const rateLimitSweepTimer = setInterval(() => {
@@ -113,6 +114,15 @@ function isSameOriginRequest(req, origin) {
   }
 }
 
+function isTrustedOrigin(origin) {
+  try {
+    const parsedOrigin = new URL(origin)
+    return parsedOrigin.protocol === 'https:' && trustedOriginHosts.has(parsedOrigin.host)
+  } catch {
+    return false
+  }
+}
+
 function setApiCorsHeaders(req, res) {
   const origin = getRequestOrigin(req)
   if (!origin || isSameOriginRequest(req, origin)) {
@@ -121,7 +131,7 @@ function setApiCorsHeaders(req, res) {
 
   if (allowAnyCorsOrigin) {
     res.setHeader('Access-Control-Allow-Origin', '*')
-  } else if (allowedCorsOrigins.has(origin)) {
+  } else if (allowedCorsOrigins.has(origin) || isTrustedOrigin(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin)
     appendVaryHeader(res, 'Origin')
   } else {
