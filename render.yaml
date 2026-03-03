@@ -19,6 +19,8 @@
         value: "10000"
       - key: CONTACT_SMTP_TIMEOUT_MS
         value: "8500"
+      - key: CONTACT_HANDLER_TIMEOUT_MS
+        value: "9000"
       - key: RATE_LIMIT_WINDOW_MS
         value: "600000"
       - key: RATE_LIMIT_MAX_POSTS

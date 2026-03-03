@@ -68,6 +68,7 @@ Corps attendu pour `POST /api/contact`:
 - `SMTP_PORT`: port SMTP (ex: `465`)
 - `SMTP_SECURE`: `true`/`false` (souvent `true` pour 465)
 - `CONTACT_SMTP_TIMEOUT_MS`: timeout SMTP en ms (plafonné automatiquement pour rester sous le timeout global API)
+- `CONTACT_HANDLER_TIMEOUT_MS`: timeout dur du traitement `/api/contact` pour éviter les réponses bloquées
 - `SMTP_FALLBACK_ENABLED`: active une tentative fallback SMTP automatique (défaut `true`)
 - `SMTP_FALLBACK_PORT`: port fallback SMTP (défaut `587` si port principal `465`)
 - `SMTP_FALLBACK_SECURE`: mode TLS fallback (`false` pour `587`)
