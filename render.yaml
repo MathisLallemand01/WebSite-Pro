@@ -1,0 +1,17 @@
+﻿services:
+  - type: web
+    name: site-perso
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: REVIEWS_DB_PATH
+        value: /var/data/reviews.sqlite
+    disk:
+      name: reviews-data
+      mountPath: /var/data
+      sizeGB: 1
