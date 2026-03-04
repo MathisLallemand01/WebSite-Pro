@@ -1,6 +1,6 @@
 import { timingSafeEqual } from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { access, appendFile, mkdir, stat } from 'node:fs/promises'
+import { access, appendFile, mkdir, readdir, stat } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { dirname, extname, join, posix, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -830,6 +830,52 @@ async function fileExists(pathname) {
   }
 }
 
+async function resolveAssetHashFallback(pathname) {
+  const normalizedPath = posix.normalize(pathname)
+  if (!normalizedPath.startsWith('/assets/')) {
+    return null
+  }
+
+  const fileName = normalizedPath.slice('/assets/'.length)
+  if (!fileName || fileName.includes('/')) {
+    return null
+  }
+
+  const extension = extname(fileName).toLowerCase()
+  if (extension !== '.js' && extension !== '.css') {
+    return null
+  }
+
+  const pattern = new RegExp(`^(.+)-[^.]+\\${extension === '.js' ? '.js' : '.css'}$`)
+  const match = fileName.match(pattern)
+  if (!match) {
+    return null
+  }
+
+  const baseName = match[1]
+  const assetsDir = resolve(DIST_DIR, 'assets')
+  let entries = []
+
+  try {
+    entries = await readdir(assetsDir, { withFileTypes: true })
+  } catch {
+    return null
+  }
+
+  const candidates = entries
+    .filter((entry) => entry.isFile())
+    .map((entry) => entry.name)
+    .filter((name) => name.startsWith(`${baseName}-`) && name.endsWith(extension))
+    .sort()
+
+  const latestCandidate = candidates[candidates.length - 1]
+  if (!latestCandidate) {
+    return null
+  }
+
+  return resolve(assetsDir, latestCandidate)
+}
+
 async function sendFile(req, res, pathname) {
   const extension = extname(pathname).toLowerCase()
   const contentType = MIME_TYPES[extension] || 'application/octet-stream'
@@ -1162,8 +1208,12 @@ async function handleStatic(req, res) {
     if (!requestedExtension) {
       filePath = resolve(DIST_DIR, 'index.html')
     } else {
-      sendJson(res, 404, { error: 'Ressource introuvable.' })
-      return
+      const hashedAssetFallback = await resolveAssetHashFallback(url.pathname)
+      if (!hashedAssetFallback || !(await fileExists(hashedAssetFallback))) {
+        sendJson(res, 404, { error: 'Ressource introuvable.' })
+        return
+      }
+      filePath = hashedAssetFallback
     }
   }
 
