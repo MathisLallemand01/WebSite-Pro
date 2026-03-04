@@ -53,7 +53,6 @@ Corps attendu pour `POST /api/contact`:
 ## Variables d'environnement
 
 - `PORT`: port HTTP du backend (Render le fournit automatiquement)
-- `REVIEWS_DB_PATH`: chemin du fichier SQLite (ex: `/var/data/reviews.sqlite`)
 - `VITE_API_BASE_URL`: optionnel, utile si le frontend et l'API sont sur 2 domaines différents
 - `API_PROXY_TARGET`: optionnel en dev Vite (par défaut `http://localhost:3001`)
 - `CORS_ORIGIN`: liste d'origines autorisées pour l'API (ex: `https://site.fr,https://www.site.fr`). Par défaut: aucun CORS cross-origin.
@@ -62,8 +61,14 @@ Corps attendu pour `POST /api/contact`:
 - `REQUEST_TIMEOUT_MS`: timeout requête HTTP en ms (défaut `10000`)
 - `RATE_LIMIT_WINDOW_MS`: fenêtre de rate-limit pour `POST /api/reviews` en ms (défaut `600000`)
 - `RATE_LIMIT_MAX_POSTS`: nombre max de `POST /api/reviews` par IP et par fenêtre (défaut `20`)
+- `SUPABASE_URL`: URL du projet Supabase (ex: `https://xxxx.supabase.co`)
+- `SUPABASE_SERVICE_ROLE_KEY`: clé service role (backend uniquement, jamais côté frontend)
+- `SUPABASE_REVIEWS_TABLE`: table Postgres pour les avis (défaut `reviews`)
+- `SUPABASE_SCHEMA`: schema Postgres utilisé par PostgREST (défaut `public`)
+- `SUPABASE_TIMEOUT_MS`: timeout des requêtes Supabase en ms (défaut `8000`)
 - `CONTACT_TO_EMAIL`: email de destination (défaut `mathis.lallemmand2@gmail.com`)
 - `CONTACT_FROM_EMAIL`: email expéditeur SMTP
+- `CONTACT_BACKUP_PATH`: fichier NDJSON de sauvegarde des demandes contact en cas d'échec email (ex: `/var/data/failed-contact-requests.ndjson`)
 - `SMTP_HOST`: serveur SMTP (ex: `smtp.gmail.com`)
 - `SMTP_PORT`: port SMTP (ex: `465`)
 - `SMTP_SECURE`: `true`/`false` (souvent `true` pour 465)
@@ -77,6 +82,23 @@ Corps attendu pour `POST /api/contact`:
 - `EMAIL_TRANSPORT`: `auto` (défaut), `smtp` ou `resend`
 - `RESEND_API_KEY`: clé API Resend (recommandé sur Render free)
 - `RESEND_FROM_EMAIL`: expéditeur Resend (ex: `onboarding@resend.dev` pour tests)
+
+## Schema Supabase (reviews)
+
+Crée la table `reviews` dans Supabase SQL Editor:
+
+```sql
+create table if not exists public.reviews (
+  id bigint generated always as identity primary key,
+  name text not null,
+  role text not null default 'Client',
+  rating int not null check (rating between 1 and 5),
+  text text not null,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists reviews_created_at_idx on public.reviews (created_at desc);
+```
 
 ## Déploiement Render
 

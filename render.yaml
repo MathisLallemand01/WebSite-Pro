@@ -9,8 +9,6 @@
     envVars:
       - key: NODE_VERSION
         value: "22"
-      - key: REVIEWS_DB_PATH
-        value: /var/data/reviews.sqlite
       - key: CORS_ORIGIN
         value: https://www.mathislallemand.fr,https://mathislallemand.fr
       - key: MAX_BODY_SIZE
@@ -25,10 +23,22 @@
         value: "600000"
       - key: RATE_LIMIT_MAX_POSTS
         value: "20"
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_REVIEWS_TABLE
+        value: reviews
+      - key: SUPABASE_SCHEMA
+        value: public
+      - key: SUPABASE_TIMEOUT_MS
+        value: "8000"
       - key: CONTACT_TO_EMAIL
         value: mathis.lallemmand2@gmail.com
       - key: CONTACT_FROM_EMAIL
         sync: false
+      - key: CONTACT_BACKUP_PATH
+        value: /var/data/failed-contact-requests.ndjson
       - key: SMTP_HOST
         sync: false
       - key: SMTP_PORT

@@ -1,31 +1,113 @@
-﻿import { mkdirSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
-import { DatabaseSync } from 'node:sqlite'
-import { fileURLToPath } from 'node:url'
+const SUPABASE_URL = (process.env.SUPABASE_URL || '').trim().replace(/\/+$/, '')
+const SUPABASE_SERVICE_ROLE_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim()
+const SUPABASE_REVIEWS_TABLE = (process.env.SUPABASE_REVIEWS_TABLE || 'reviews').trim()
+const SUPABASE_SCHEMA = (process.env.SUPABASE_SCHEMA || 'public').trim()
+const SUPABASE_TIMEOUT_MS = readPositiveIntEnv('SUPABASE_TIMEOUT_MS', 8_000)
 
-const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const DEFAULT_DB_PATH = resolve(ROOT_DIR, 'data', 'reviews.sqlite')
-const DB_PATH = process.env.REVIEWS_DB_PATH
-  ? resolve(process.env.REVIEWS_DB_PATH)
-  : DEFAULT_DB_PATH
+function readPositiveIntEnv(name, fallback) {
+  const raw = process.env[name]
+  if (!raw) return fallback
 
-function ensureDir(pathname) {
-  mkdirSync(dirname(pathname), { recursive: true })
+  const parsed = Number(raw)
+  if (!Number.isFinite(parsed) || parsed <= 0 || !Number.isInteger(parsed)) {
+    return fallback
+  }
+
+  return parsed
 }
 
-function createDb() {
-  ensureDir(DB_PATH)
-  const db = new DatabaseSync(DB_PATH)
+function getMissingSupabaseEnvVars() {
+  const missing = []
+  if (!SUPABASE_URL) missing.push('SUPABASE_URL')
+  if (!SUPABASE_SERVICE_ROLE_KEY) missing.push('SUPABASE_SERVICE_ROLE_KEY')
+  if (!SUPABASE_REVIEWS_TABLE) missing.push('SUPABASE_REVIEWS_TABLE')
+  return missing
+}
 
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS reviews (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      payload TEXT NOT NULL,
-      created_at TEXT NOT NULL
-    );
-  `)
+function createStoreNotConfiguredError() {
+  const missingEnv = getMissingSupabaseEnvVars()
+  const error = new Error('Supabase reviews store is not configured.')
+  error.code = 'reviews_store_not_configured'
+  error.missingEnv = missingEnv
+  return error
+}
 
-  return db
+function createSupabaseHttpError(status, details) {
+  const error = new Error('Supabase request failed.')
+  error.code = 'supabase_http_error'
+  error.status = status
+  error.details = details
+  return error
+}
+
+function createSupabaseTimeoutError() {
+  const error = new Error('Supabase request timed out.')
+  error.code = 'supabase_timeout'
+  return error
+}
+
+async function readResponseBody(response) {
+  const raw = await response.text()
+  if (!raw) return null
+
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return { raw }
+  }
+}
+
+function createReviewsTableUrl(queryParams) {
+  const endpoint = new URL(`/rest/v1/${encodeURIComponent(SUPABASE_REVIEWS_TABLE)}`, `${SUPABASE_URL}/`)
+  if (!queryParams) {
+    return endpoint
+  }
+
+  Object.entries(queryParams).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === '') return
+    endpoint.searchParams.set(key, String(value))
+  })
+  return endpoint
+}
+
+async function supabaseRequest({ method, query, body, prefer }) {
+  if (getMissingSupabaseEnvVars().length > 0) {
+    throw createStoreNotConfiguredError()
+  }
+
+  const controller = new AbortController()
+  const timeoutHandle = setTimeout(() => controller.abort(), SUPABASE_TIMEOUT_MS)
+
+  try {
+    const response = await fetch(createReviewsTableUrl(query), {
+      method,
+      signal: controller.signal,
+      headers: {
+        apikey: SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+        Accept: 'application/json',
+        ...(SUPABASE_SCHEMA ? { 'Accept-Profile': SUPABASE_SCHEMA } : {}),
+        ...(SUPABASE_SCHEMA ? { 'Content-Profile': SUPABASE_SCHEMA } : {}),
+        ...(prefer ? { Prefer: prefer } : {}),
+        ...(body ? { 'Content-Type': 'application/json' } : {}),
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    })
+
+    const parsedBody = await readResponseBody(response)
+    if (!response.ok) {
+      throw createSupabaseHttpError(response.status, parsedBody)
+    }
+
+    return parsedBody
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw createSupabaseTimeoutError()
+    }
+    throw error
+  } finally {
+    clearTimeout(timeoutHandle)
+  }
 }
 
 function stripControlChars(value, { keepNewLines = false } = {}) {
@@ -84,56 +166,89 @@ function normalizeReview(input) {
 }
 
 function toRowReview(row) {
-  let payload
-  try {
-    payload = JSON.parse(row.payload)
-  } catch {
-    return null
-  }
+  if (!row || typeof row !== 'object') return null
+
+  const id = Number(row.id)
+  const rating = Number(row.rating)
+  const createdAt =
+    typeof row.created_at === 'string'
+      ? row.created_at
+      : typeof row.createdAt === 'string'
+        ? row.createdAt
+        : ''
+
+  if (!Number.isInteger(id) || id <= 0) return null
+  if (!Number.isInteger(rating) || rating < 1 || rating > 5) return null
+
+  const name = typeof row.name === 'string' ? row.name : ''
+  const role = typeof row.role === 'string' ? row.role : 'Client'
+  const text = typeof row.text === 'string' ? row.text : ''
+  if (!name || !text) return null
 
   return {
-    id: row.id,
-    name: payload.name,
-    role: payload.role,
-    rating: payload.rating,
-    text: payload.text,
-    createdAt: row.created_at,
+    id,
+    name,
+    role: role || 'Client',
+    text,
+    rating,
+    createdAt: createdAt || new Date(0).toISOString(),
   }
 }
 
 export function createReviewsStore() {
-  const db = createDb()
-
-  const selectStmt = db.prepare('SELECT id, payload, created_at FROM reviews ORDER BY id DESC LIMIT 200')
-  const selectByIdStmt = db.prepare('SELECT id, payload, created_at FROM reviews WHERE id = ?')
-  const insertStmt = db.prepare('INSERT INTO reviews (payload, created_at) VALUES (?, ?)')
-  const updateStmt = db.prepare('UPDATE reviews SET payload = ? WHERE id = ?')
-  const deleteStmt = db.prepare('DELETE FROM reviews WHERE id = ?')
-
   return {
-    list() {
-      return selectStmt.all().map(toRowReview).filter(Boolean)
+    isConfigured() {
+      return getMissingSupabaseEnvVars().length === 0
     },
-    add(input) {
+    getMissingEnvVars() {
+      return getMissingSupabaseEnvVars()
+    },
+    async list() {
+      const rows = await supabaseRequest({
+        method: 'GET',
+        query: {
+          select: 'id,name,role,rating,text,created_at',
+          order: 'id.desc',
+          limit: '200',
+        },
+      })
+
+      if (!Array.isArray(rows)) return []
+      return rows.map(toRowReview).filter(Boolean)
+    },
+    async add(input) {
       const normalized = normalizeReview(input)
       if (!normalized) return null
 
-      const createdAt = new Date().toISOString()
-      const result = insertStmt.run(JSON.stringify(normalized), createdAt)
-      return {
-        id: Number(result.lastInsertRowid),
-        ...normalized,
-        createdAt,
-      }
+      const rows = await supabaseRequest({
+        method: 'POST',
+        prefer: 'return=representation',
+        query: {
+          select: 'id,name,role,rating,text,created_at',
+        },
+        body: {
+          ...normalized,
+          created_at: new Date().toISOString(),
+        },
+      })
+
+      const created = Array.isArray(rows) ? rows[0] : null
+      return toRowReview(created)
     },
-    update(id, input) {
+    async update(id, input) {
       const numericId = Number(id)
       if (!Number.isInteger(numericId) || numericId <= 0) return null
 
-      const row = selectByIdStmt.get(numericId)
-      if (!row) return null
+      const existingRows = await supabaseRequest({
+        method: 'GET',
+        query: {
+          select: 'id,name,role,rating,text,created_at',
+          id: `eq.${numericId}`,
+          limit: '1',
+        },
+      })
 
-      const current = toRowReview(row)
+      const current = Array.isArray(existingRows) ? toRowReview(existingRows[0]) : null
       if (!current) return null
 
       const mergedInput = {
@@ -145,23 +260,36 @@ export function createReviewsStore() {
       const normalized = normalizeReview(mergedInput)
       if (!normalized) return false
 
-      updateStmt.run(JSON.stringify(normalized), numericId)
+      const rows = await supabaseRequest({
+        method: 'PATCH',
+        prefer: 'return=representation',
+        query: {
+          select: 'id,name,role,rating,text,created_at',
+          id: `eq.${numericId}`,
+        },
+        body: normalized,
+      })
 
-      return {
-        id: numericId,
-        ...normalized,
-        createdAt: current.createdAt,
-      }
+      const updated = Array.isArray(rows) ? rows[0] : null
+      return toRowReview(updated)
     },
-    remove(id) {
+    async remove(id) {
       const numericId = Number(id)
       if (!Number.isInteger(numericId) || numericId <= 0) return false
 
-      const result = deleteStmt.run(numericId)
-      return Number(result.changes) > 0
+      const rows = await supabaseRequest({
+        method: 'DELETE',
+        prefer: 'return=representation',
+        query: {
+          select: 'id',
+          id: `eq.${numericId}`,
+        },
+      })
+
+      return Array.isArray(rows) && rows.length > 0
     },
     close() {
-      db.close()
+      // no-op for Supabase HTTP client
     },
   }
 }

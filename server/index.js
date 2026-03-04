@@ -532,6 +532,41 @@ function getErrorResponseCode(error) {
   return Number.isFinite(responseCode) ? responseCode : null
 }
 
+function sendReviewsStoreError(res, error) {
+  const errorCode = getErrorCode(error)
+
+  if (errorCode === 'reviews_store_not_configured') {
+    sendJson(res, 503, {
+      error: 'Base avis non configuree (Supabase).',
+      code: errorCode,
+      missingEnv: Array.isArray(error?.missingEnv) ? error.missingEnv : [],
+    })
+    return
+  }
+
+  if (errorCode === 'supabase_timeout') {
+    sendJson(res, 504, {
+      error: 'Supabase ne repond pas dans les temps.',
+      code: errorCode,
+    })
+    return
+  }
+
+  if (errorCode === 'supabase_http_error') {
+    sendJson(res, 502, {
+      error: 'Erreur Supabase lors du traitement des avis.',
+      code: errorCode,
+      status: Number.isFinite(error?.status) ? error.status : undefined,
+    })
+    return
+  }
+
+  sendJson(res, 500, {
+    error: 'Erreur serveur.',
+    code: errorCode || 'reviews_store_error',
+  })
+}
+
 async function withTimeout(promise, timeoutMs) {
   let timeoutHandle = null
 
@@ -845,8 +880,22 @@ async function handleApi(req, res, store) {
     return true
   }
 
+  if ((isReviewsCollectionRoute || isReviewItemRoute) && !store.isConfigured()) {
+    sendJson(res, 503, {
+      error: 'Base avis non configuree (Supabase).',
+      code: 'reviews_store_not_configured',
+      missingEnv: store.getMissingEnvVars(),
+    })
+    return true
+  }
+
   if (isReviewsCollectionRoute && req.method === 'GET') {
-    sendJson(res, 200, { reviews: store.list() })
+    try {
+      const reviews = await store.list()
+      sendJson(res, 200, { reviews })
+    } catch (error) {
+      sendReviewsStoreError(res, error)
+    }
     return true
   }
 
@@ -871,7 +920,14 @@ async function handleApi(req, res, store) {
       return true
     }
 
-    const created = store.add(body.data)
+    let created = null
+    try {
+      created = await store.add(body.data)
+    } catch (error) {
+      sendReviewsStoreError(res, error)
+      return true
+    }
+
     if (!created) {
       sendJson(res, 400, { error: 'Donnees invalides.' })
       return true
@@ -1027,7 +1083,14 @@ async function handleApi(req, res, store) {
       return true
     }
 
-    const updated = store.update(reviewId, body.data)
+    let updated = null
+    try {
+      updated = await store.update(reviewId, body.data)
+    } catch (error) {
+      sendReviewsStoreError(res, error)
+      return true
+    }
+
     if (updated === null) {
       sendJson(res, 404, { error: 'Avis introuvable.' })
       return true
@@ -1046,7 +1109,14 @@ async function handleApi(req, res, store) {
       return true
     }
 
-    const deleted = store.remove(reviewId)
+    let deleted = false
+    try {
+      deleted = await store.remove(reviewId)
+    } catch (error) {
+      sendReviewsStoreError(res, error)
+      return true
+    }
+
     if (!deleted) {
       sendJson(res, 404, { error: 'Avis introuvable.' })
       return true
