@@ -165,10 +165,10 @@ function normalizeReview(input) {
   }
 }
 
-function toRowReview(row) {
+function toStoredReview(row) {
   if (!row || typeof row !== 'object') return null
 
-  const id = Number(row.id)
+  const storageId = Number(row.id)
   const rating = Number(row.rating)
   const createdAt =
     typeof row.created_at === 'string'
@@ -177,7 +177,7 @@ function toRowReview(row) {
         ? row.createdAt
         : ''
 
-  if (!Number.isInteger(id) || id <= 0) return null
+  if (!Number.isInteger(storageId) || storageId <= 0) return null
   if (!Number.isInteger(rating) || rating < 1 || rating > 5) return null
 
   const name = typeof row.name === 'string' ? row.name : ''
@@ -186,13 +186,44 @@ function toRowReview(row) {
   if (!name || !text) return null
 
   return {
-    id,
+    storageId,
     name,
     role: role || 'Client',
     text,
     rating,
     createdAt: createdAt || new Date(0).toISOString(),
   }
+}
+
+function toPublicReview(storedReview, publicId) {
+  return {
+    id: publicId,
+    name: storedReview.name,
+    role: storedReview.role,
+    text: storedReview.text,
+    rating: storedReview.rating,
+    createdAt: storedReview.createdAt,
+  }
+}
+
+function mapStoredReviewsWithPublicIds(storedReviews) {
+  return storedReviews.map((storedReview, index) => ({
+    storageId: storedReview.storageId,
+    review: toPublicReview(storedReview, index + 1),
+  }))
+}
+
+async function listStoredReviews() {
+  const rows = await supabaseRequest({
+    method: 'GET',
+    query: {
+      select: 'id,name,role,rating,text,created_at',
+      order: 'id.asc',
+    },
+  })
+
+  if (!Array.isArray(rows)) return []
+  return rows.map(toStoredReview).filter(Boolean)
 }
 
 export function createReviewsStore() {
@@ -204,17 +235,11 @@ export function createReviewsStore() {
       return getMissingSupabaseEnvVars()
     },
     async list() {
-      const rows = await supabaseRequest({
-        method: 'GET',
-        query: {
-          select: 'id,name,role,rating,text,created_at',
-          order: 'id.desc',
-          limit: '200',
-        },
-      })
-
-      if (!Array.isArray(rows)) return []
-      return rows.map(toRowReview).filter(Boolean)
+      const storedReviews = await listStoredReviews()
+      const reviewsWithPublicIds = mapStoredReviewsWithPublicIds(storedReviews)
+      return reviewsWithPublicIds
+        .map((entry) => entry.review)
+        .reverse()
     },
     async add(input) {
       const normalized = normalizeReview(input)
@@ -232,23 +257,20 @@ export function createReviewsStore() {
         },
       })
 
-      const created = Array.isArray(rows) ? rows[0] : null
-      return toRowReview(created)
+      const created = Array.isArray(rows) ? toStoredReview(rows[0]) : null
+      if (!created) return null
+
+      const storedReviews = await listStoredReviews()
+      const reviewsWithPublicIds = mapStoredReviewsWithPublicIds(storedReviews)
+      const createdWithPublicId = reviewsWithPublicIds.find((entry) => entry.storageId === created.storageId)
+      return createdWithPublicId ? createdWithPublicId.review : null
     },
     async update(id, input) {
-      const numericId = Number(id)
-      if (!Number.isInteger(numericId) || numericId <= 0) return null
+      const publicId = Number(id)
+      if (!Number.isInteger(publicId) || publicId <= 0) return null
 
-      const existingRows = await supabaseRequest({
-        method: 'GET',
-        query: {
-          select: 'id,name,role,rating,text,created_at',
-          id: `eq.${numericId}`,
-          limit: '1',
-        },
-      })
-
-      const current = Array.isArray(existingRows) ? toRowReview(existingRows[0]) : null
+      const storedReviews = await listStoredReviews()
+      const current = storedReviews[publicId - 1] || null
       if (!current) return null
 
       const mergedInput = {
@@ -265,24 +287,30 @@ export function createReviewsStore() {
         prefer: 'return=representation',
         query: {
           select: 'id,name,role,rating,text,created_at',
-          id: `eq.${numericId}`,
+          id: `eq.${current.storageId}`,
         },
         body: normalized,
       })
 
-      const updated = Array.isArray(rows) ? rows[0] : null
-      return toRowReview(updated)
+      const updated = Array.isArray(rows) ? toStoredReview(rows[0]) : null
+      if (!updated) return null
+
+      return toPublicReview(updated, publicId)
     },
     async remove(id) {
-      const numericId = Number(id)
-      if (!Number.isInteger(numericId) || numericId <= 0) return false
+      const publicId = Number(id)
+      if (!Number.isInteger(publicId) || publicId <= 0) return false
+
+      const storedReviews = await listStoredReviews()
+      const reviewToDelete = storedReviews[publicId - 1] || null
+      if (!reviewToDelete) return false
 
       const rows = await supabaseRequest({
         method: 'DELETE',
         prefer: 'return=representation',
         query: {
           select: 'id',
-          id: `eq.${numericId}`,
+          id: `eq.${reviewToDelete.storageId}`,
         },
       })
 
